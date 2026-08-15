@@ -1,4 +1,5 @@
 import os
+import re
 from typing import List, Dict, Any, Optional
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -38,7 +39,6 @@ CRITICAL CONSTRAINTS & GUARDRAILS:
             return current_query
 
         if not self.client:
-            # Fallback heuristic: return original query if no LLM configured
             return current_query
 
         history_summary = "\n".join([f"{msg['role']}: {msg['content']}" for msg in chat_history[-4:]])
@@ -133,14 +133,28 @@ Provide a well-cited answer strictly grounded in the context passages above."""
                     "chunks_used": len(retrieved_chunks)
                 }
 
-        # Deterministic offline mock fallback
-        print("⚠️ OPENAI_API_KEY not configured. Generating synthetic grounded response...")
-        top_chunk = retrieved_chunks[0] if retrieved_chunks else None
+        # Offline Mock Fallback: Strict content keyword verification
+        print("⚠️ OPENAI_API_KEY not configured. Evaluating grounded fallback...")
+        stop_words = {
+            "what", "is", "the", "for", "and", "of", "in", "to", "regarding", "about", 
+            "are", "a", "an", "policy", "rules", "guidelines", "document", "subsidies", "allowances"
+        }
+        query_words = set(re.findall(r"\w+", query.lower())) - stop_words
+        
+        top_chunk = None
+        if retrieved_chunks and query_words:
+            for chunk in retrieved_chunks:
+                chunk_words = set(re.findall(r"\w+", chunk.get("text", "").lower()))
+                # Must match substantive words like 'hardware', 'stipend', 'hours', etc.
+                if query_words & chunk_words:
+                    top_chunk = chunk
+                    break
+
         if top_chunk:
             source = top_chunk.get("metadata", {}).get("source_file", "doc.pdf")
             page = top_chunk.get("metadata", {}).get("page_number", 1)
             mock_answer = (
-                f"Based on the enterprise documentation, {top_chunk.get('text', '')[:140]}... "
+                f"Based on the enterprise documentation, {top_chunk.get('text', '').strip()} "
                 f"[Source: {source}, Page: {page}]"
             )
             citations = [f"{source} (Page {page})"]
